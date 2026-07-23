@@ -1,0 +1,9 @@
+{
+	"appId": "com.nox.app",
+	"appName": "NOX",
+	"webDir": "dist",
+	"backgroundColor": "#08080a",
+	"android": {
+		"backgroundColor": "#08080a"
+	}
+}
