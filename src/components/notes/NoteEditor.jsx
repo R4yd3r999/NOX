@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { uid } from "../../lib/id.js";
-import Button from "../Button.jsx";
+import { groupNoteLines } from "../../lib/noteLines.js";
 
 export default function NoteEditor({
   note,
@@ -13,9 +13,13 @@ export default function NoteEditor({
   const isBlankNote =
     !note.title && note.lines.length === 1 && !note.lines[0].text;
   const [isEditing, setIsEditing] = useState(isBlankNote);
-  const [focusedLineId, setFocusedLineId] = useState(note.lines[0]?.id);
+  const [focusedLineId, setFocusedLineId] = useState(null);
+  const [focusedBlockKey, setFocusedBlockKey] = useState(
+    note.lines[0]?.type !== "checkbox" ? note.lines[0]?.id : null
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const inputRefs = useRef({});
+  const textareaRefs = useRef({});
   const focusNextId = useRef(null);
 
   useEffect(() => {
@@ -44,7 +48,66 @@ export default function NoteEditor({
     );
   }
 
+  function handleTextBlockChange(block, value) {
+    const newTexts = value.split("\n");
+    const newLines = newTexts.map((text, i) => {
+      const existing = block.lines[i];
+      return existing ? { ...existing, text } : newLine();
+    });
+    updateLines((lines) => {
+      const firstIdx = lines.findIndex((l) => l.id === block.lines[0].id);
+      if (firstIdx === -1) return lines;
+      const before = lines.slice(0, firstIdx);
+      const after = lines.slice(firstIdx + block.lines.length);
+      return [...before, ...newLines, ...after];
+    });
+  }
+
   function toggleListModeForFocused() {
+    // Caso 1: el foco está en un ítem de checklist -> lo devuelve a texto
+    // normal (se fusionará con el párrafo vecino automáticamente).
+    const focusedCheckboxLine = note.lines.find(
+      (l) => l.id === focusedLineId && l.type === "checkbox"
+    );
+    if (focusedCheckboxLine) {
+      updateLines((lines) =>
+        lines.map((l) =>
+          l.id === focusedCheckboxLine.id
+            ? { ...l, type: "text", checked: false }
+            : l
+        )
+      );
+      return;
+    }
+
+    // Caso 2: el foco está dentro de un bloque de texto -> convierte solo
+    // la línea donde está el cursor en un ítem de checklist.
+    if (focusedBlockKey) {
+      const ta = textareaRefs.current[focusedBlockKey];
+      const block = groupNoteLines(note.lines).find(
+        (b) => b.type === "text" && b.lines[0].id === focusedBlockKey
+      );
+      if (ta && block) {
+        const cursorPos = ta.selectionStart ?? ta.value.length;
+        const lineIndex = ta.value.slice(0, cursorPos).split("\n").length - 1;
+        const targetLine = block.lines[lineIndex];
+        if (targetLine) {
+          updateLines((lines) =>
+            lines.map((l) =>
+              l.id === targetLine.id
+                ? { ...l, type: "checkbox", checked: false }
+                : l
+            )
+          );
+          focusNextId.current = targetLine.id;
+          setFocusedLineId(targetLine.id);
+          setFocusedBlockKey(null);
+          return;
+        }
+      }
+    }
+
+    // Fallback: sin nada enfocado, alterna la última línea de la nota.
     const targetId = focusedLineId || note.lines[note.lines.length - 1]?.id;
     if (!targetId) return;
     updateLines((lines) =>
@@ -87,17 +150,22 @@ export default function NoteEditor({
   function handleBackspaceEmpty(lineId) {
     const idx = note.lines.findIndex((l) => l.id === lineId);
     if (idx <= 0) return;
-    const prevId = note.lines[idx - 1].id;
+    const prevLine = note.lines[idx - 1];
     updateLines((lines) => lines.filter((l) => l.id !== lineId));
-    focusNextId.current = prevId;
-    setFocusedLineId(prevId);
+    if (prevLine.type === "checkbox") {
+      focusNextId.current = prevLine.id;
+      setFocusedLineId(prevLine.id);
+    }
   }
 
-  const focusedLine = note.lines.find((l) => l.id === focusedLineId);
-  const listModeActive = focusedLine?.type === "checkbox";
+  const listModeActive = note.lines.some(
+    (l) => l.id === focusedLineId && l.type === "checkbox"
+  );
+
+  const blocks = groupNoteLines(note.lines);
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop note-editor-backdrop" onClick={onClose}>
       <div
         className="modal-sheet note-editor-sheet"
         onClick={(e) => e.stopPropagation()}
@@ -181,6 +249,7 @@ export default function NoteEditor({
             className="note-title-input"
             placeholder="Título"
             value={note.title}
+            autoFocus={isBlankNote}
             onChange={(e) => onChange((n) => ({ ...n, title: e.target.value }))}
           />
         ) : (
@@ -188,50 +257,62 @@ export default function NoteEditor({
         )}
 
         <div className="note-lines">
-          {note.lines.map((line) => (
-            <div
-              key={line.id}
-              className={`note-line ${line.type === "checkbox" ? "is-check" : ""}`}
-            >
-              {line.type === "checkbox" && (
+          {blocks.map((block) =>
+            block.type === "checkbox" ? (
+              <div key={block.line.id} className="note-line is-check">
                 <input
                   type="checkbox"
-                  checked={line.checked}
-                  onChange={() => toggleChecked(line.id)}
+                  checked={block.line.checked}
+                  onChange={() => toggleChecked(block.line.id)}
                   className="note-line-checkbox"
                 />
-              )}
-              {isEditing ? (
-                <input
-                  ref={(el) => (inputRefs.current[line.id] = el)}
-                  className={`note-line-input ${
-                    line.type === "checkbox" && line.checked ? "checked" : ""
-                  }`}
-                  value={line.text}
-                  placeholder={line.type === "checkbox" ? "Elemento…" : "Escribe algo…"}
-                  onFocus={() => setFocusedLineId(line.id)}
-                  onChange={(e) => setLineText(line.id, e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      handleEnter(line.id);
-                    } else if (e.key === "Backspace" && line.text === "") {
-                      e.preventDefault();
-                      handleBackspaceEmpty(line.id);
-                    }
-                  }}
-                />
-              ) : (
-                <span
-                  className={`note-line-text ${
-                    line.type === "checkbox" && line.checked ? "checked" : ""
-                  }`}
-                >
-                  {line.text || "\u00A0"}
-                </span>
-              )}
-            </div>
-          ))}
+                {isEditing ? (
+                  <input
+                    ref={(el) => (inputRefs.current[block.line.id] = el)}
+                    className={`note-line-input ${block.line.checked ? "checked" : ""}`}
+                    value={block.line.text}
+                    placeholder="Elemento…"
+                    onFocus={() => {
+                      setFocusedLineId(block.line.id);
+                      setFocusedBlockKey(null);
+                    }}
+                    onChange={(e) => setLineText(block.line.id, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleEnter(block.line.id);
+                      } else if (e.key === "Backspace" && block.line.text === "") {
+                        e.preventDefault();
+                        handleBackspaceEmpty(block.line.id);
+                      }
+                    }}
+                  />
+                ) : (
+                  <span
+                    className={`note-line-text ${block.line.checked ? "checked" : ""}`}
+                  >
+                    {block.line.text || "\u00A0"}
+                  </span>
+                )}
+              </div>
+            ) : isEditing ? (
+              <AutoGrowTextarea
+                key={block.lines[0].id}
+                value={block.lines.map((l) => l.text).join("\n")}
+                placeholder="Escribe algo…"
+                refCallback={(el) => (textareaRefs.current[block.lines[0].id] = el)}
+                onFocus={() => {
+                  setFocusedBlockKey(block.lines[0].id);
+                  setFocusedLineId(null);
+                }}
+                onChangeValue={(val) => handleTextBlockChange(block, val)}
+              />
+            ) : (
+              <p key={block.lines[0].id} className="note-text-block-view">
+                {block.lines.map((l) => l.text).join("\n") || "\u00A0"}
+              </p>
+            )
+          )}
         </div>
 
         {folders.length > 0 && (
@@ -260,6 +341,37 @@ export default function NoteEditor({
         )}
       </div>
     </div>
+  );
+}
+
+function newLine() {
+  return { id: uid("ln"), text: "", type: "text", checked: false };
+}
+
+function AutoGrowTextarea({ value, onChangeValue, onFocus, refCallback, placeholder }) {
+  const localRef = useRef(null);
+
+  useEffect(() => {
+    const el = localRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    }
+  }, [value]);
+
+  return (
+    <textarea
+      ref={(el) => {
+        localRef.current = el;
+        refCallback(el);
+      }}
+      className="note-text-block-input"
+      value={value}
+      placeholder={placeholder}
+      rows={1}
+      onFocus={onFocus}
+      onChange={(e) => onChangeValue(e.target.value)}
+    />
   );
 }
 

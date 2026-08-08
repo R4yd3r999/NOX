@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { groupNoteLines } from "../../lib/noteLines.js";
 
 export default function NoteCard({
   note,
@@ -21,8 +22,9 @@ export default function NoteCard({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [menuOpen]);
 
-  const visibleLines = note.lines.slice(0, 6);
-  const hasMore = note.lines.length > 6;
+  const visibleLines = note.lines.slice(0, 8);
+  const hasMore = note.lines.length > 8;
+  const visibleBlocks = groupNoteLines(visibleLines);
 
   return (
     <div className="note-card panel hud-corners fade-slide-in">
@@ -87,24 +89,24 @@ export default function NoteCard({
         visibleLines.every((l) => !l.text.trim()) ? (
           <p className="note-empty-hint">Nota vacía…</p>
         ) : (
-          visibleLines.map((line) =>
-            line.type === "checkbox" ? (
+          visibleBlocks.map((block) =>
+            block.type === "checkbox" ? (
               <label
-                key={line.id}
-                className={`note-check-line ${line.checked ? "checked" : ""}`}
+                key={block.line.id}
+                className={`note-check-line ${block.line.checked ? "checked" : ""}`}
                 onClick={(e) => e.stopPropagation()}
               >
                 <input
                   type="checkbox"
-                  checked={line.checked}
-                  onChange={() => onToggleCheckbox(line.id)}
+                  checked={block.line.checked}
+                  onChange={() => onToggleCheckbox(block.line.id)}
                 />
-                <span>{line.text || "\u00A0"}</span>
+                <span>{block.line.text || "\u00A0"}</span>
               </label>
             ) : (
-              line.text.trim() && (
-                <p key={line.id} className="note-text-line">
-                  {line.text}
+              block.lines.some((l) => l.text.trim()) && (
+                <p key={block.lines[0].id} className="note-text-line">
+                  {block.lines.map((l) => l.text).join("\n")}
                 </p>
               )
             )
